@@ -5,12 +5,18 @@ use std::{fmt::Display, future::Future, sync::Arc, time::Duration};
 use bitcoind_async_client::{Client as BitcoinClient, traits::Reader};
 use btc_tracker::tx_driver::TxDriverHealthHandle;
 use jsonrpsee::http_client::HttpClient;
+use metrics::gauge;
 use secret_service_client::SecretServiceClient;
 use secret_service_proto::v2::traits::{SchnorrSigner, SecretService};
 use strata_asm_rpc::traits::AsmControlApiClient;
 use strata_bridge_db::fdb::client::FdbClient;
 use strata_bridge_exec::output_handles::NativeWallet;
+use strata_bridge_primitives::types::OperatorIdx;
 use strata_mosaic_client::MosaicClient;
+use strata_mosaic_client_api::{
+    MosaicClientApi,
+    types::{Role, TablesetReadiness},
+};
 use strata_p2p::swarm::handle::CommandHandle;
 use tokio::{
     sync::RwLock,
@@ -137,6 +143,92 @@ pub(in crate::mode) fn spawn_p2p_probe(
             }
         }
     });
+}
+
+/// Starts a periodic watchtower-capability probe.
+///
+/// The mosaic probe answers "is the process up". This answers "can this operator still
+/// counterproof each peer" — a reachable mosaic whose tableset is consumed reports `ok` and
+/// still cannot defend the bridge.
+///
+/// **Self-reported**, so it is sound for operating this node and unsound as a network safety
+/// figure. A trustless ceiling must come from Bitcoin, where a counterproof spends a
+/// per-watchtower output of the contest tx.
+pub(in crate::mode) fn spawn_watchtower_capability_probe(
+    client: Arc<BridgeMosaicClient>,
+    peers: Vec<OperatorIdx>,
+    probe_interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut ticker = interval(nonzero_interval(probe_interval));
+
+        loop {
+            ticker.tick().await;
+
+            let mut capable_peers = 0u64;
+            for &peer in &peers {
+                // Garbler is the watchtower side (`counterproof.rs` takes that path), so only it
+                // feeds coverage. Evaluator is exported too — same loop, same RPC — so a
+                // half-set-up pair is visible.
+                for role in [Role::Garbler, Role::Evaluator] {
+                    // The client retries internally for longer than the probe interval, which
+                    // stalls the loop and freezes every gauge at its last value. A frozen
+                    // "ready" is the worst reading this metric can give, so bound each call.
+                    let readiness = timeout(
+                        DEFAULT_HEALTH_PROBE_TIMEOUT,
+                        client.tableset_readiness(peer, role),
+                    )
+                    .await;
+
+                    match readiness {
+                        Ok(Ok(readiness)) => {
+                            emit_tableset_metric(peer, role, Some(readiness));
+                            if role == Role::Garbler && readiness.is_ready() {
+                                capable_peers += 1;
+                            }
+                        }
+                        Ok(Err(err)) => {
+                            // Clear every series rather than leave the last good value
+                            // standing: unknown must not read as ready.
+                            emit_tableset_metric(peer, role, None);
+                            warn!(%peer, %role, %err, "watchtower capability probe failed");
+                        }
+                        Err(_) => {
+                            emit_tableset_metric(peer, role, None);
+                            warn!(%peer, %role, "watchtower capability probe timed out");
+                        }
+                    }
+                }
+            }
+
+            // The bridge's safety margin in one number: how many peers this operator could
+            // still produce a counterproof against.
+            gauge!("strata_bridge_watchtower_coverage").set(capable_peers as f64);
+        }
+    });
+}
+
+/// Emits the readiness series one-hot. `None` clears every state, so a failed probe reads as
+/// "unknown" instead of leaving a stale value.
+fn emit_tableset_metric(peer: OperatorIdx, role: Role, readiness: Option<TablesetReadiness>) {
+    let peer = peer.to_string();
+    let role = role.to_string();
+    for state in TablesetReadiness::ALL {
+        let value = if readiness == Some(state) { 1.0 } else { 0.0 };
+        gauge!(
+            "strata_bridge_tableset_readiness",
+            "peer" => peer.clone(),
+            "role" => role.clone(),
+            "state" => state.as_label(),
+        )
+        .set(value);
+    }
+    gauge!(
+        "strata_bridge_watchtower_capable",
+        "peer" => peer,
+        "role" => role,
+    )
+    .set(readiness.is_some_and(TablesetReadiness::is_ready) as u8 as f64);
 }
 
 /// Starts a periodic Mosaic RPC probe.

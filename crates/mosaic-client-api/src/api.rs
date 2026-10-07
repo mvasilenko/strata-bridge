@@ -128,6 +128,19 @@ pub trait MosaicClientApi: Send + Sync + 'static {
         game_index: GameIndex,
     ) -> Result<bool, MosaicError>;
 
+    /// Returns the standing readiness of the setup for the given operator and role, independent
+    /// of any game.
+    ///
+    /// [`is_setup_available`](Self::is_setup_available) answers "can this setup serve game N",
+    /// which is the right question while processing a withdrawal and the wrong one while
+    /// monitoring. This answers "is this pair armed right now", which is what a watchtower
+    /// coverage metric needs.
+    async fn tableset_readiness(
+        &self,
+        operator_idx: OperatorIdx,
+        role: Role,
+    ) -> Result<TablesetReadiness, MosaicError>;
+
     /// Garbler side: completes adaptor signatures for a contested withdrawal.
     ///
     /// `operator_idx`: the remote operator in this setup.

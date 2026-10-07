@@ -24,6 +24,7 @@ use crate::{
             health_probes::{
                 spawn_asm_rpc_probe, spawn_bitcoin_rpc_probe, spawn_fdb_probe, spawn_mosaic_probe,
                 spawn_p2p_probe, spawn_s2_probe, spawn_wallet_probe,
+                spawn_watchtower_capability_probe,
             },
             mosaic_client::{
                 init_mosaic_client, init_mosaic_rpc_client, run_mosaic_setup, spawn_mosaic_poller,
@@ -179,6 +180,14 @@ pub(crate) async fn bootstrap(
         probe_interval,
         health_registry.clone(),
     );
+    // Liveness of the mosaic process is not the same question as whether this operator can still
+    // counterproof. Track the tablesets too, keyed by peer.
+    let peer_idxs: Vec<_> = operator_table
+        .operator_idxs()
+        .into_iter()
+        .filter(|idx| *idx != pov_idx)
+        .collect();
+    spawn_watchtower_capability_probe(mosaic_client.clone(), peer_idxs, probe_interval);
     spawn_s2_probe(s2_client.clone(), probe_interval, health_registry.clone());
     spawn_wallet_probe(
         operator_wallet.clone(),

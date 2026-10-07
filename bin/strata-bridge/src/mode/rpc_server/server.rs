@@ -1,6 +1,6 @@
 //! JSON-RPC server wiring and trait implementations for bridge operator APIs.
 
-use std::{fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -15,6 +15,7 @@ use libp2p::{
     PeerId,
     identity::{PublicKey as LibP2pPublicKey, ed25519::PublicKey as LibP2pEdPublicKey},
 };
+use metrics::gauge;
 use serde::Serialize;
 use strata_asm_bridge_types::SafeHarborAddress;
 use strata_bridge_common::params::Params;
@@ -229,6 +230,7 @@ impl BridgeRpc {
                 match Self::refresh_registry(&db, &cached_registry).await {
                     Ok(()) => {
                         health_registry.mark_ok(COMPONENT_RPC_CACHE, "cache_refreshed");
+                        emit_graph_deadline_metrics(&*cached_registry.read().await);
                         debug!("rpc state machine registry cache refreshed");
                     }
                     Err(err) => {
@@ -588,4 +590,47 @@ fn rpc_error<T: fmt::Display + Serialize>(
     data: T,
 ) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(err_code.code(), message, Some(data))
+}
+
+/// Exports dispute-game progress in **blocks**, the unit `nSequence` enforces. Block intervals
+/// are Poisson, so wall-clock is an estimate that errs early when the chain is busy — threshold
+/// in blocks, render `blocks * ~600s` at the dashboard.
+///
+/// Every input is on-chain or a protocol constant, so unlike the self-reported health series
+/// these are checkable by anyone with a node.
+fn emit_graph_deadline_metrics(registry: &SMRegistry) {
+    let mut states: BTreeMap<&'static str, u64> = BTreeMap::new();
+
+    for (idx, graph) in registry.graphs() {
+        let state = graph.state();
+        *states.entry(state.name()).or_default() += 1;
+
+        // Same tip the transition logic compares against, so the gauge cannot disagree with
+        // the branch that actually fires.
+        let (Some((anchor_kind, anchor)), Some(tip)) =
+            (state.timelock_anchor(), state.last_processed_block_height())
+        else {
+            continue;
+        };
+
+        gauge!(
+            "strata_bridge_graph_timelock_anchor_height",
+            "deposit" => idx.deposit.to_string(),
+            "operator" => idx.operator.to_string(),
+            "anchor" => anchor_kind,
+        )
+        .set(anchor as f64);
+
+        gauge!(
+            "strata_bridge_graph_blocks_since_anchor",
+            "deposit" => idx.deposit.to_string(),
+            "operator" => idx.operator.to_string(),
+            "anchor" => anchor_kind,
+        )
+        .set(tip.saturating_sub(anchor) as f64);
+    }
+
+    for (name, count) in states {
+        gauge!("strata_bridge_graph_state_total", "state" => name).set(count as f64);
+    }
 }

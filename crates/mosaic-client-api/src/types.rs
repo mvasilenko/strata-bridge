@@ -48,3 +48,50 @@ pub type CompletedSignatures = [Signature; N_DEPOSIT_INPUT_WIRES + N_WITHDRAWAL_
 /// Raw Groth16 proof bytes.
 #[derive(Debug, Clone, Copy)]
 pub struct G16ProofRaw(pub [u8; N_WITHDRAWAL_INPUT_WIRES]);
+
+/// Whether a tableset can still back a fresh counterproof.
+///
+/// [`is_setup_available`](crate::api::MosaicClientApi::is_setup_available) answers for one
+/// specific game; this is the standing question monitoring needs — is this `(peer, role)` pair
+/// armed right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TablesetReadiness {
+    /// Setup complete and unspent. This pair can produce a counterproof.
+    Ready,
+    /// Setup still running. Not yet usable.
+    PendingSetup,
+    /// Currently resolving a contested withdrawal. Cannot back another one.
+    InContest,
+    /// Already spent on a contested withdrawal. Cannot back another one.
+    Consumed,
+    /// Aborted on a protocol violation. A new setup is required.
+    Aborted,
+}
+
+impl TablesetReadiness {
+    /// Whether this pair can produce a counterproof right now.
+    pub const fn is_ready(self) -> bool {
+        matches!(self, Self::Ready)
+    }
+
+    /// Stable, low-cardinality label for metrics.
+    pub const fn as_label(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::PendingSetup => "pending_setup",
+            Self::InContest => "in_contest",
+            Self::Consumed => "consumed",
+            Self::Aborted => "aborted",
+        }
+    }
+
+    /// Every variant, so the metric can be emitted one-hot and a state that
+    /// has been left shows as 0 rather than as a gap in the series.
+    pub const ALL: [Self; 5] = [
+        Self::Ready,
+        Self::PendingSetup,
+        Self::InContest,
+        Self::Consumed,
+        Self::Aborted,
+    ];
+}

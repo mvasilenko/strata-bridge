@@ -1,9 +1,11 @@
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-# ensure no colllsion
-MOSAIC_PORT_BASE = 11900
+# Fixed base, unlike the RPC ports which go through PortProbingFactory. Override
+# to run a second bridge environment beside one already holding this range.
+MOSAIC_PORT_BASE = int(os.environ.get("MOSAIC_PORT_BASE", 11900))
 
 MOSAIC_KEYS_PATH = Path(__file__).parent.parent / "artifacts" / "mosaic.json"
 

@@ -64,10 +64,17 @@ pub(crate) fn process_block(
     let deposit_cfg = applicator.registry().cfg().deposit.clone();
     let graph_cfg = applicator.registry().cfg().graph.clone();
     let stake_cfg = applicator.registry().cfg().stake.clone();
-    let height = block_event
-        .block
-        .bip34_block_height()
-        .expect("must have a valid block height");
+    // Fails on pre-BIP34 (version 1) blocks, which a regtest chain starts with.
+    // Such a block predates BIP34 and cannot carry a bridge transaction, so skip
+    // it rather than crash the node. Reachable whenever the ASM anchors at or
+    // near genesis — e.g. sharing an L1 with an OL that anchors at height 0.
+    let Ok(height) = block_event.block.bip34_block_height() else {
+        tracing::debug!(
+            blockhash = %block_event.block.block_hash(),
+            "skipping pre-BIP34 block: no height in coinbase"
+        );
+        return Ok(());
+    };
 
     // Snapshot pre-existing SM IDs: newly created SMs already know the current block height,
     // so only pre-existing ones need a NewBlock cursor event.

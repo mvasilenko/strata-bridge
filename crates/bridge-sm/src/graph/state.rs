@@ -521,6 +521,68 @@ impl Display for GraphState {
 }
 
 impl GraphState {
+    /// Low-cardinality name of this state, for metric labels.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Created { .. } => "created",
+            Self::GraphGenerated { .. } => "graph_generated",
+            Self::AdaptorsVerified { .. } => "adaptors_verified",
+            Self::NoncesCollected { .. } => "nonces_collected",
+            Self::GraphSigned { .. } => "graph_signed",
+            Self::Assigned { .. } => "assigned",
+            Self::Fulfilled { .. } => "fulfilled",
+            Self::Claimed { .. } => "claimed",
+            Self::Contested { .. } => "contested",
+            Self::BridgeProofPosted { .. } => "bridge_proof_posted",
+            Self::BridgeProofTimedout { .. } => "bridge_proof_timedout",
+            Self::CounterProofPosted { .. } => "counterproof_posted",
+            Self::AllNackd { .. } => "all_nackd",
+            Self::Acked { .. } => "acked",
+            Self::Withdrawn { .. } => "withdrawn",
+            Self::Slashed { .. } => "slashed",
+            Self::Aborted { .. } => "aborted",
+        }
+    }
+
+    /// The on-chain event this state's timelocks are counted from, if any.
+    ///
+    /// Every dispute-game deadline is `anchor + timelock`, in blocks — the timelocks are BIP68
+    /// `relative::Height` values enforced via `nSequence`, so blocks are the exact unit and
+    /// wall-clock is an estimate. Exposing the anchor lets a caller compute blocks remaining
+    /// without duplicating the transition logic that gates on it.
+    pub const fn timelock_anchor(&self) -> Option<(&'static str, BitcoinBlockHeight)> {
+        match self {
+            Self::Claimed {
+                claim_block_height, ..
+            } => Some(("claim", *claim_block_height)),
+            Self::Contested {
+                contest_block_height,
+                ..
+            }
+            | Self::BridgeProofPosted {
+                contest_block_height,
+                ..
+            }
+            | Self::BridgeProofTimedout {
+                contest_block_height,
+                ..
+            }
+            | Self::CounterProofPosted {
+                contest_block_height,
+                ..
+            }
+            | Self::AllNackd {
+                contest_block_height,
+                ..
+            }
+            | Self::Acked {
+                contest_block_height,
+                ..
+            } => Some(("contest", *contest_block_height)),
+            _ => None,
+        }
+    }
+
     /// Returns the height of the last processed Bitcoin block for this graph state.
     pub const fn last_processed_block_height(&self) -> Option<&BitcoinBlockHeight> {
         match self {

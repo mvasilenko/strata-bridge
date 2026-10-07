@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 
 from factory.common_cfg import Duration
@@ -106,7 +107,12 @@ class MetricsConfig:
 
 @dataclass
 class BridgeConfigParams:
-    min_withdrawal_fulfillment_window: int = 144
+    # Must be strictly less than the ASM's assignment_duration or the bridge
+    # node refuses to start. When sharing an L1 the ASM value comes from the
+    # OL, so derive from it rather than hardcoding.
+    min_withdrawal_fulfillment_window: int = min(
+        144, max(1, int(os.environ.get("ASM_ASSIGNMENT_DURATION", 10_000)) // 2)
+    )
     cooperative_payout_timeout: int = 144
     max_fee_rate: int = 10
     nag_interval_ms: int = 10_000

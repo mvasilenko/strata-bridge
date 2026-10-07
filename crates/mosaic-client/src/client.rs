@@ -401,6 +401,29 @@ impl<R: MosaicRpcClient + Send + Sync + 'static, P: MosaicIdResolver> MosaicClie
         }
     }
 
+    #[instrument(skip_all, fields(%operator_idx, %role))]
+    async fn tableset_readiness(
+        &self,
+        operator_idx: OperatorIdx,
+        role: Role,
+    ) -> Result<TablesetReadiness, MosaicError> {
+        let tableset_id = self.get_tableset_id(role, operator_idx).await?;
+        let status = self
+            .read_tableset_status(tableset_id, operator_idx, role)
+            .await?;
+
+        // Unlike the game-scoped paths, every state is a legitimate answer here — a monitoring
+        // probe must report `Aborted` rather than fail, otherwise the series goes blank exactly
+        // when it matters most.
+        Ok(match status {
+            RpcTablesetStatus::SetupComplete => TablesetReadiness::Ready,
+            RpcTablesetStatus::Incomplete { .. } => TablesetReadiness::PendingSetup,
+            RpcTablesetStatus::Contest { .. } => TablesetReadiness::InContest,
+            RpcTablesetStatus::Consumed { .. } => TablesetReadiness::Consumed,
+            RpcTablesetStatus::Aborted { .. } => TablesetReadiness::Aborted,
+        })
+    }
+
     #[instrument(skip_all, fields(%operator_idx, %game_index))]
     async fn complete_adaptor_sigs(
         &self,

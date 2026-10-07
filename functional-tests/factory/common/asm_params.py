@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -90,6 +91,10 @@ class BridgeSubprotocol:
     assignment_duration: int
     operator_fee: int
     recovery_delay: int
+    # US spelling: this harness's asm-runner deserializes `safe_harbor_address`.
+    # The OL's datatool emits `safe_harbour_address` -- the two Rust codebases
+    # have diverged on the key, so the JSON keys differ by design. What must
+    # match for checkpoint verification is the *value*, not the key.
     safe_harbor_address: str
 
 
@@ -208,7 +213,13 @@ def build_asm_params(
     safe_harbour_address: str = DEFAULT_SAFE_HARBOUR_ADDRESS,
 ) -> AsmParams:
     compressed_keys = [f"02{key}" for key in musig2_keys]
-    anchor = build_l1_anchor(genesis_height, get_block_header)
+    # ASM_GENESIS_L1_HEIGHT only moves the *checkpoint* genesis. The anchor is
+    # separate, and when this ASM shares an L1 with a real OL its anchor must
+    # match the OL's or checkpoint predicate verification fails with
+    # "witness verification failed ... Bip340Schnorr: signature error" -- which
+    # then surfaces, misleadingly, as "invalid epoch: (expected 2, got N)".
+    anchor_height = int(os.environ.get("ASM_ANCHOR_HEIGHT", genesis_height))
+    anchor = build_l1_anchor(anchor_height, get_block_header)
     signers = [p2wpkh_address(key, anchor.network) for key in compressed_keys]
     admin = AdminSubprotocol(
         strata_administrator=ThresholdConfig(signers=signers, threshold=1),
@@ -230,19 +241,37 @@ def build_asm_params(
         ),
         max_seqno_gap=10,
     )
+    # When a real OL sequencer shares this L1 (see fn_devnet_shared_l1), the ASM
+    # must trust ITS key and ITS checkpoint genesis, not dev-cli's mock. The ASM
+    # only accepts envelopes committing to the configured sequencer key, so a
+    # mismatch shows up as "checkpoint envelope authentication failed" and the
+    # bridge never sees a withdrawal assignment.
+    #
+    # Point these at the OL's own asm-params.json:
+    #   export ASM_SEQUENCER_KEY=$(jq -r ... .sequencer_key   <l2>/asm-params.json)
+    #   export ASM_CHECKPOINT_PREDICATE=...
+    #   export ASM_GENESIS_OL_BLKID=...
     checkpoint = CheckpointSubprotocol(
-        sequencer_key=MOCK_SEQUENCER_KEY,
-        checkpoint_predicate="AlwaysAccept",
-        genesis_l1_height=genesis_height,
-        genesis_ol_blkid="0" * 64,
+        sequencer_key=os.environ.get("ASM_SEQUENCER_KEY", MOCK_SEQUENCER_KEY),
+        checkpoint_predicate=os.environ.get("ASM_CHECKPOINT_PREDICATE", "AlwaysAccept"),
+        genesis_l1_height=int(os.environ.get("ASM_GENESIS_L1_HEIGHT", genesis_height)),
+        genesis_ol_blkid=os.environ.get("ASM_GENESIS_OL_BLKID", "0" * 64),
     )
+    # When sharing an L1 with a real OL, the Bridge subprotocol must match the
+    # OL's or the checkpoint commitment diverges the moment a bridge event
+    # mutates this state, and signature verification fails several components
+    # away as "invalid epoch".
     bridge = BridgeSubprotocol(
         operators=compressed_keys,
-        denomination=denomination,
-        assignment_duration=assignment_duration,
-        operator_fee=operator_fee,
+        denomination=int(os.environ.get("ASM_DENOMINATION", denomination)),
+        assignment_duration=int(
+            os.environ.get("ASM_ASSIGNMENT_DURATION", assignment_duration)
+        ),
+        operator_fee=int(os.environ.get("ASM_OPERATOR_FEE", operator_fee)),
         recovery_delay=recovery_delay,
-        safe_harbor_address=safe_harbour_address,
+        safe_harbor_address=os.environ.get(
+            "ASM_SAFE_HARBOUR_ADDRESS", safe_harbour_address
+        ),
     )
     return AsmParams(
         magic=magic,

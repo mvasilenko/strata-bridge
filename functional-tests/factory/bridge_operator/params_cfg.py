@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 
 from constants import ASM_MAGIC_BYTES
@@ -37,9 +38,13 @@ class Keys:
 class BridgeProtocolParams:
     bury_depth: int = 2
     magic_bytes: str = ASM_MAGIC_BYTES
-    deposit_amount: int = 1_000_000_000
+    # Must agree with the ASM params or the bridge node exits with
+    # "bridge/ASM params mismatch". When sharing an L1 with a real OL these are
+    # driven from the OL's asm-params.json (see ASM_DENOMINATION/ASM_OPERATOR_FEE
+    # in analysis/tools/devnet.sh), so both sides derive from one source.
+    deposit_amount: int = int(os.environ.get("ASM_DENOMINATION", 1_000_000_000))
     stake_amount: int = 100_000_000
-    operator_fee: int = 10_000_000
+    operator_fee: int = int(os.environ.get("ASM_OPERATOR_FEE", 10_000_000))
     sweep_fee_rate: int = 10
     recovery_delay: int = 1_008
     contest_timelock: int = 45

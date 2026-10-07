@@ -30,7 +30,11 @@ pub trait StrataBridgeMonitoringApi {
     #[method(name = "bridgeOperators")]
     async fn get_bridge_operators(&self) -> RpcResult<Vec<PublicKey>>;
 
-    /// Query operator status (Online/Offline).
+    /// Whether *this* node has a live P2P connection to the given operator.
+    ///
+    /// **Peer-only, and not a health check.** It is `is_connected(peer_id)`, so a node asked
+    /// about itself always returns `Offline`; callers must exclude their own operator. A
+    /// connected operator can still have a dead mosaic — use `/healthz` for health.
     #[method(name = "operatorStatus")]
     async fn get_operator_status(&self, operator_pk: PublicKey) -> RpcResult<RpcOperatorStatus>;
 

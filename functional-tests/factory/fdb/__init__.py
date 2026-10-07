@@ -152,6 +152,19 @@ class FdbFactory(PortProbingFactory):
             # Operation not permitted".
             "-i",
             f"fdb-test-{cluster_id}",
+            # Ratekeeper throttles writes to TPSLimit=0 when the storage
+            # server's free-space RATIO drops below this, which surfaces in the
+            # bridge as `FdbError { error_code: 1031 }` -- a transaction
+            # timeout -- and panics the orchestrator. Diagnosed from the trace
+            # log: Reason="7" = storage_server_min_free_space_ratio, with
+            # WorstFreeSpaceStorageServer="0".
+            #
+            # The default is 0.05. A dev box sitting just under 5% free trips it
+            # with no other load. Lowered here because this is a throwaway
+            # regtest datadir; the floor exists to stop FDB filling a disk it
+            # shares, which does not apply to a devnet you delete afterwards.
+            # Do NOT carry this to anything that keeps data.
+            f"--knob_min_available_space_ratio={os.environ.get('FDB_MIN_FREE_SPACE_RATIO', '0.01')}",
         ]
 
         props = {
